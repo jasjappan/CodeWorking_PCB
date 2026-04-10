@@ -1,5 +1,7 @@
 #include<Wire.h>
 #include<Updated_MS5837.hpp>
+#include <Adafruit_BNO08x.h>
+
 
 #define EncoderPin1 10
 #define EncoderPin2 11
@@ -22,6 +24,10 @@ bool readDone = false;
 long unsigned int T1_delay;
 int cmd_i;
 
+#define BNO08X_RESET -1
+Adafruit_BNO08x  bno08x(BNO08X_RESET);
+sh2_SensorValue_t imu_value;
+
 //Sensor data to Raspberry Pi ( writtten in IntervalInterrupts in Seconds instead of Hz )
 // int barTP_tx = 20Hz;
 // int rangingTP_tx = 50Hz;
@@ -30,7 +36,7 @@ int cmd_i;
 //Timer for sensor functions ( read from sensors )
 int barTimer = 0;
 int rangingTimer = 0;
-int imuSensor = 0;
+int imuTimer = 0;
 
 struct
 {
@@ -45,10 +51,13 @@ struct
 }rangingPacket;
 
 
-// struct
-// {
-
-// }imuPacket;
+struct
+{
+  float real;
+  float i;
+  float j;
+  float k;
+}imuPacket;
 
 struct
 {
@@ -57,10 +66,9 @@ struct
 
 
 //Sampling time period for each Sensor
-long unsigned int barTP_rx =  330;//30Hz;
-long unsigned int rangingTP_rx = 330; //30Hz;
-// int imuTP_rx =  //200Hz;       //NEED TO GET CODE FOR IMU
-
+long unsigned int barTP_rx =  33;//30Hz;
+long unsigned int rangingTP_rx = 33; //30Hz;
+long unsigned int imuTP_rx = 5;
 //Teensy to Raspberry Pi
 IntervalTimer barTimer_tx;
 IntervalTimer rangingTimer_tx;
@@ -77,6 +85,7 @@ void setup()
 {
   //UART Lines
   Serial.begin(115200);   //for Tx/Rx with Raspberry Pi
+  Serial.println("Setup started");
   Serial7.begin(115200);  //for receiving data from Ranging sensor (at given frequency)
   pinMode(TriggerPin, OUTPUT);    //Done to allow the Trigger Pin to send the low pulse for starting data sending
   digitalWrite(TriggerPin, HIGH);
@@ -104,6 +113,36 @@ void setup()
   pinMode(PWM_PIN_B, OUTPUT);
   pinMode(DIR_PIN_B, OUTPUT);
 
+
+  Wire1.begin();
+  // Try to initialize!
+  if (!bno08x.begin_I2C(0x4A, &Wire1)) {
+  //if (!bno08x.begin_UART(&Serial1)) {  // Requires a device with > 300 byte UART buffer!
+  //if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
+    Serial.println("Failed to find BNO08x chip");
+    while (1) { delay(10); }
+  }
+  // delay(1000);
+  Serial.println("BNO08x Found!");
+
+  for (int n = 0; n < bno08x.prodIds.numEntries; n++) {
+    Serial.print("Part ");
+    Serial.print(bno08x.prodIds.entry[n].swPartNumber);
+    Serial.print(": Version :");
+    Serial.print(bno08x.prodIds.entry[n].swVersionMajor);
+    Serial.print(".");
+    Serial.print(bno08x.prodIds.entry[n].swVersionMinor);
+    Serial.print(".");
+    Serial.print(bno08x.prodIds.entry[n].swVersionPatch);
+    Serial.print(" Build ");
+    Serial.println(bno08x.prodIds.entry[n].swBuildNumber);
+  }
+
+  setReports();
+
+  Serial.println("Reading events");
+  delay(100);
+
   //Interrupts Priority   !!change priority according to the rule => Highest for encoder receiving; then after that; higher priority for less frequently occuring events i.e. those with bigger time period
   // encoderTimer_tx.priority(1);
   // // Pi_rx.priority(2);
@@ -129,6 +168,14 @@ void setup()
 //....
 //higher sampling frequency sensors
 //main loop
+
+// Here is where you define the sensor outputs you want to receive
+void setReports(void) {
+  Serial.println("Setting desired reports");
+  if (! bno08x.enableReport(SH2_GAME_ROTATION_VECTOR)) {
+    Serial.println("Could not enable game vector");
+  }
+}
 
 void loop()
 {
@@ -173,6 +220,25 @@ void loop()
       readDone = true;
   }
 
+  if ( millis() - imuTimer >= imuTP_rx )
+  {
+    imuTimer = millis();
+    bno08x.getSensorEvent(&imu_value);
+    switch (imu_value.sensorId)
+    {
+      case SH2_GAME_ROTATION_VECTOR:
+        imuPacket.real = imu_value.un.gameRotationVector.real;
+        imuPacket.i = imu_value.un.gameRotationVector.i;
+        imuPacket.j = imu_value.un.gameRotationVector.j;
+        imuPacket.k = imu_value.un.gameRotationVector.k;
+        // Serial.println(imu_value.un.gameRotationVector.real);
+        // Serial.println(imu_value.un.gameRotationVector.i);
+        // Serial.println(imu_value.un.gameRotationVector.j);
+        // Serial.println(imu_value.un.gameRotationVector.k);
+        break;
+    }
+  }
+
   if ( readDone )
   {
     if ( buf[0] == 0xFF )
@@ -205,7 +271,7 @@ void loop()
   //   cmd_i = 0;
   if ( micros() - timestamp >= time_period )
     time_period = micros() - timestamp;
-  Serial.println(time_period);
+  // Serial.println(time_period);
   // Serial.println(millis() - timestamp);
   // Serial.println(millis());
   // Serial.println(micros());
@@ -291,6 +357,13 @@ void piReceive ()
         Serial.print("Incorrect command: ");
         Serial.println(motor);
       }
+    }
+    else if ( incomingByte == 'i' )
+    {
+      Serial.println(imuPacket.real);
+      Serial.println(imuPacket.i);
+      Serial.println(imuPacket.j);
+      Serial.println(imuPacket.k);
     }
     else if (incomingByte != '\n' && incomingByte != '\r')
     {

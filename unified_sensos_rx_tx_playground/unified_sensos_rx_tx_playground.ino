@@ -83,9 +83,14 @@ sh2_SensorValue_t imu_value_A, imu_value_B;
 
 //Timer for sensor functions ( read from sensors )
 //---------------------------
+unsigned int main_timer = 0;
+
 int barTimer = 0;
 int rangingTimer = 0;
 int imuTimer = 0;
+
+unsigned int wait_for_ST_bytes = 0;
+unsigned int wait_for_EN_bytes = 0;
 //---------------------------
 
 
@@ -96,11 +101,13 @@ struct
   int temp;
   int depth;
   int pressure;
+  bool initFlag;
 }barPacket;
 
 struct
 {
   int long distance;
+  bool initFlag;
 }rangingPacket_A;
 
 
@@ -110,12 +117,13 @@ struct
   float i;
   float j;
   float k;
-  bool imuInit;
+  bool initFlag;
 }imuPacket_A, imuPacket_B;
 
 struct
 {
   long encoder_copy;
+  bool initFlag;
 }encoderPacket_A, encoderPacket_B;
 
 
@@ -178,18 +186,18 @@ void setup()
   //I2C Lines
   unsigned int now = millis();
   Wire2.begin();                                      //PRESSURE SENSOR
-  while(!barSensor.init(Wire2) && ( millis() - now < 10000 ))   //wait for 10 seconds
+  while(!(barPacket.initFlag = barSensor.init(Wire2)) && ( millis() - now < 10000 ))   //wait for 10 seconds
   {
     delay(1000);
   }
   barSensor.setModel(MS5837::MS5837_30BA);
   barSensor.setFluidDensity(fluidDensity);
 
-  //Interrupt Sensor(Encoder as can't miss a single pulse)
-  // pinMode(EncoderPin1_A, INPUT);                        //ENCODER A
-  // pinMode(EncoderPin2_A, INPUT);
-  // attachInterrupt(digitalPinToInterrupt(EncoderPin1_A), updateEncoder_A, CHANGE);
-  // attachInterrupt(digitalPinToInterrupt(EncoderPin2_A), updateEncoder_A, CHANGE);
+  // Interrupt Sensor(Encoder as can't miss a single pulse)
+  pinMode(EncoderPin1_A, INPUT);                        //ENCODER A
+  pinMode(EncoderPin2_A, INPUT);
+  attachInterrupt(digitalPinToInterrupt(EncoderPin1_A), updateEncoder_A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(EncoderPin2_A), updateEncoder_A, CHANGE);
 
   pinMode(EncoderPin1_B, INPUT);                        //ENCODER B
   pinMode(EncoderPin2_B, INPUT);
@@ -209,13 +217,13 @@ void setup()
   if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
     Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
     // while (1) { delay(10); }
-    imuPacket_A.imuInit = false;
+    imuPacket_A.initFlag = false;     //not initialized 
     delay(10);          
   }
   else
   {
     Serial.println("BNO08x_A Found!");  
-    imuPacket_A.imuInit = true;
+    imuPacket_A.initFlag = true;      //initialized
     for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
       Serial.print("Part ");
       Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
@@ -242,13 +250,13 @@ void setup()
   if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
     Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
     // while (1) { delay(10); }
-    imuPacket_B.imuInit = false;
+    imuPacket_B.initFlag = false;                   //not initialized
     delay(10);          
   }
   else
   {
     Serial.println("BNO08x_B Found!");
-    imuPacket_B.imuInit = true;
+    imuPacket_B.initFlag = true;                    //initialized
     for (int n = 0; n < bno08x_B.prodIds.numEntries; n++) {
       Serial.print("Part ");
       Serial.print(bno08x_B.prodIds.entry[n].swPartNumber);
@@ -287,7 +295,7 @@ void setup()
   
   // Pi_rx.begin(piReceive, 50000);              //20Hz
 
-  rx_storer.begin(fill_cb, 25000);   //40Hz   //to store the bytes in rx buffer (~64 Bytes) into larger circular buffer cb
+  rx_storer.begin(fill_cb, 2500);   //40Hz   //to store the bytes in rx buffer (~64 Bytes) into larger circular buffer cb
 
   Serial.println("Leaving void setup");
 }
@@ -327,148 +335,162 @@ void setReports_B(void) {
 
 void loop()
 {
-  // Serial.println("IN VOID LOOP");
-  timestamp = micros();
-  // Serial.println(timestamp);
-  // Serial.println(millis());
-  // Serial.println(micros());
-  // Serial.println("HELLO");
-  if ( millis() - barTimer >= barTP_rx && (Wire2.available()))        //contains one pressure sensor
+  if ( millis() - main_timer > 25)    //40Hz
   {
-    barTimer = millis();
-    barPacket.depth = (int)barSensor.depth();
-    barPacket.temp = (int)barSensor.temperature();
-    barPacket.pressure = (int)barSensor.pressure();
-    // barSensorRead();
-  }
-
-  if ( (millis() - rangingTimer >= rangingTP_rx) && (!trigDone))
-  {
-    rangingTimer = millis();
-    digitalWrite(TriggerPin, LOW);
-    delayMicroseconds(500);
-    digitalWrite(TriggerPin, HIGH);
-    T1_delay = millis();
-    trigDone = true;
-    range_rx_index = 0;
-    // triggerSensor();
-    // debugRawBytes();
-  }
-
-  
-  if ( trigDone && ((millis() - T1_delay) >= 10) )
-  {
-    if ( range_rx_index < 4 )      //replaced while with if
+    // Serial.println("IN VOID LOOP");
+    timestamp = micros();
+    // Serial.println(timestamp);
+    // Serial.println(millis());
+    // Serial.println(micros());
+    // Serial.println("HELLO");
+    if ( millis() - barTimer >= barTP_rx && (Wire2.available()))        //contains one pressure sensor
     {
-      if ( Serial7.available() )
+      barTimer = millis();
+      if ( barPacket.initFlag )
       {
-        buf[range_rx_index++] = Serial7.read();
-      }
-    }
-    else
-      readDone = true;
-  }
-
-  
-
-  if ( readDone )       //oneshot
-  {
-    if ( buf[0] == 0xFF )
-    {
-      int calcsum = (buf[0] + buf[1] + buf[2]) & 0xFF;
-      if (calcsum == buf[3])
-      {
-        rangingPacket_A.distance = buf[1] * 256 + buf[2];
-        trigDone = false;
-        readDone = false;
+        barPacket.depth = (int)barSensor.depth();
+        barPacket.temp = (int)barSensor.temperature();
+        barPacket.pressure = (int)barSensor.pressure();
+      // barSensorRead();
       }
       else
       {
-        //CHECKSUM ERROR
-        trigDone = false;
-        readDone = false;
+        barPacket.depth = -999;
+        barPacket.temp = -999;
+        barPacket.pressure = -999;
       }
     }
-    //HEADER NOT MATCHED
-    trigDone = false;
-    readDone = false;
-  }
 
-
-
-  if ( millis() - imuTimer >= imuTP_rx )      //contains both IMU_A and IMU_B
-  {
-    imuTimer = millis();
-    if ( imuPacket_A.imuInit )
+    if ( (millis() - rangingTimer >= rangingTP_rx) && (!trigDone))
     {
-      bno08x_A.getSensorEvent(&imu_value_A);
-      // Serial.println("updating imu value");
-      // Serial.println(imu_value_A.sensorId);
-      switch (imu_value_A.sensorId)
+      rangingTimer = millis();
+      digitalWrite(TriggerPin, LOW);
+      delayMicroseconds(500);
+      digitalWrite(TriggerPin, HIGH);
+      T1_delay = millis();
+      trigDone = true;
+      range_rx_index = 0;
+      // triggerSensor();
+      // debugRawBytes();
+    }
+
+    
+    if ( trigDone && ((millis() - T1_delay) >= 10) )
+    {
+      if ( range_rx_index < 4 )      //replaced while with if
       {
-        case SH2_GAME_ROTATION_VECTOR:
-          imuPacket_A.real = imu_value_A.un.gameRotationVector.real;
-          imuPacket_A.i = imu_value_A.un.gameRotationVector.i;
-          imuPacket_A.j = imu_value_A.un.gameRotationVector.j;
-          imuPacket_A.k = imu_value_A.un.gameRotationVector.k;
-          // Serial.println("Setting IMU packet");
-          // Serial.println(imu_value_A.un.gameRotationVector.real);
-          // Serial.println(imu_value_A.un.gameRotationVector.i);
-          // Serial.println(imu_value_A.un.gameRotationVector.j);
-          // Serial.println(imu_value_A.un.gameRotationVector.k);
-          break;
+        if ( Serial7.available() )
+        {
+          buf[range_rx_index++] = Serial7.read();
+        }
       }
-    }
-    else      //if not initialized
-    {
-      imuPacket_A.real = -999.0;
-      imuPacket_A.i = -999.0;
-      imuPacket_A.j = -999.0;
-      imuPacket_A.k = -999.0;
+      else
+        readDone = true;
     }
 
-    if ( imuPacket_B.imuInit )
+    
+
+    if ( readDone )       //oneshot
     {
-      bno08x_B.getSensorEvent(&imu_value_B);
-      // Serial.println("updating imu value");
-      // Serial.println(imu_value_A.sensorId);
-      switch (imu_value_B.sensorId)
+      if ( buf[0] == 0xFF )
       {
-        case SH2_GAME_ROTATION_VECTOR:
-          imuPacket_B.real = imu_value_B.un.gameRotationVector.real;
-          imuPacket_B.i = imu_value_B.un.gameRotationVector.i;
-          imuPacket_B.j = imu_value_B.un.gameRotationVector.j;
-          imuPacket_B.k = imu_value_B.un.gameRotationVector.k;
-          // Serial.println("Setting IMU packet");
-          // Serial.println(imu_value_A.un.gameRotationVector.real);
-          // Serial.println(imu_value_A.un.gameRotationVector.i);
-          // Serial.println(imu_value_A.un.gameRotationVector.j);
-          // Serial.println(imu_value_A.un.gameRotationVector.k);
-          break;
+        int calcsum = (buf[0] + buf[1] + buf[2]) & 0xFF;
+        if (calcsum == buf[3])
+        {
+          rangingPacket_A.distance = buf[1] * 256 + buf[2];
+          trigDone = false;
+          readDone = false;
+        }
+        else
+        {
+          //CHECKSUM ERROR
+          trigDone = false;
+          readDone = false;
+        }
+      }
+      //HEADER NOT MATCHED
+      trigDone = false;
+      readDone = false;
+    }
+
+
+
+    if ( millis() - imuTimer >= imuTP_rx )      //contains both IMU_A and IMU_B
+    {
+      imuTimer = millis();
+      if ( imuPacket_A.initFlag )
+      {
+        bno08x_A.getSensorEvent(&imu_value_A);
+        // Serial.println("updating imu value");
+        // Serial.println(imu_value_A.sensorId);
+        switch (imu_value_A.sensorId)
+        {
+          case SH2_GAME_ROTATION_VECTOR:
+            imuPacket_A.real = imu_value_A.un.gameRotationVector.real;
+            imuPacket_A.i = imu_value_A.un.gameRotationVector.i;
+            imuPacket_A.j = imu_value_A.un.gameRotationVector.j;
+            imuPacket_A.k = imu_value_A.un.gameRotationVector.k;
+            // Serial.println("Setting IMU packet");
+            // Serial.println(imu_value_A.un.gameRotationVector.real);
+            // Serial.println(imu_value_A.un.gameRotationVector.i);
+            // Serial.println(imu_value_A.un.gameRotationVector.j);
+            // Serial.println(imu_value_A.un.gameRotationVector.k);
+            break;
+        }
+      }
+      else      //if not initialized
+      {
+        imuPacket_A.real = -999.0;
+        imuPacket_A.i = -999.0;
+        imuPacket_A.j = -999.0;
+        imuPacket_A.k = -999.0;
+      }
+
+      if ( imuPacket_B.initFlag )
+      {
+        bno08x_B.getSensorEvent(&imu_value_B);
+        // Serial.println("updating imu value");
+        // Serial.println(imu_value_A.sensorId);
+        switch (imu_value_B.sensorId)
+        {
+          case SH2_GAME_ROTATION_VECTOR:
+            imuPacket_B.real = imu_value_B.un.gameRotationVector.real;
+            imuPacket_B.i = imu_value_B.un.gameRotationVector.i;
+            imuPacket_B.j = imu_value_B.un.gameRotationVector.j;
+            imuPacket_B.k = imu_value_B.un.gameRotationVector.k;
+            // Serial.println("Setting IMU packet");
+            // Serial.println(imu_value_A.un.gameRotationVector.real);
+            // Serial.println(imu_value_A.un.gameRotationVector.i);
+            // Serial.println(imu_value_A.un.gameRotationVector.j);
+            // Serial.println(imu_value_A.un.gameRotationVector.k);
+            break;
+        }
+      }
+      else      //if not initialized
+      {
+        imuPacket_B.real = -999.0;
+        imuPacket_B.i = -999.0;
+        imuPacket_B.j = -999.0;
+        imuPacket_B.k = -999.0;
       }
     }
-    else      //if not initialized
-    {
-      imuPacket_B.real = -999.0;
-      imuPacket_B.i = -999.0;
-      imuPacket_B.j = -999.0;
-      imuPacket_B.k = -999.0;
-    }
+
+
+
+    build_sensor_packet();    //send all sensors' data to Raspberry Pi
+
+    rx_parser();              //to go through stored incoming bytes in circular buffer cb
+
+    if ( micros() - timestamp >= time_period )
+      time_period = micros() - timestamp;
+    // Serial.println(time_period);
+    // Serial.println(millis() - timestamp);
+    // Serial.println(millis());
+    // Serial.println(micros());
+    // Serial.println("IN VOID LOOP");
+
+    main_timer = millis();
   }
-
-
-
-  build_sensor_packet();    //send all sensors' data to Raspberry Pi
-
-  rx_parser();              //to go through stored incoming bytes in circular buffer cb
-
-  if ( micros() - timestamp >= time_period )
-    time_period = micros() - timestamp;
-  // Serial.println(time_period);
-  // Serial.println(millis() - timestamp);
-  // Serial.println(millis());
-  // Serial.println(micros());
-  // Serial.println("IN VOID LOOP");
 }
 //------------------------------------------------------------------------------------------------------------
 
@@ -504,7 +526,10 @@ char cb_read (void)
 {
   if ( buf_length == 0)
   {
-    return '\0';  //for false
+    // Serial.println("RX Buffer empty");
+    // delay(1000);
+    // return '\0';  //for false
+    return 'L';
   }
   char c = cb[readIndex++];
   buf_length--;
@@ -524,11 +549,14 @@ void rx_parser(void)  //to get read from cb and execute a command if any, using 
   if (!strcmp(state, "IDLE"))
   {
     Serial.println("IDLE");
+    // char 
     if (cb_read() == '<')
     {
       // state = "CHECK_ST";
       // Serial.println("IDLE if");
+      Serial.println();
       strcpy(state, "CHECK_ST");
+      wait_for_ST_bytes = millis();
     }
     else
     {
@@ -537,10 +565,11 @@ void rx_parser(void)  //to get read from cb and execute a command if any, using 
       strcpy(state, "IDLE");
     }
   }
-  if (!strcmp(state, "CHECK_ST"))
+  if (!strcmp(state, "CHECK_ST") && (millis() - wait_for_ST_bytes > 10))
   {
     Serial.println("CHECK_ST");
     char c1,c2,c3;
+    c1 = c2 = c3 = 0;
     if (((c1 = cb_read()) == 'S') && ((c2 = cb_read()) == 'T') && ((c3 = cb_read()) == '>'))
     {
       strcpy(state, "START_PARS");
@@ -551,7 +580,7 @@ void rx_parser(void)  //to get read from cb and execute a command if any, using 
       Serial.println(c2);
       Serial.println(c3);
       Serial.println("Parse error ST");
-      delay(1000);
+      // delay(1000);
       strcpy(state, "IDLE");
     }
   }
@@ -563,6 +592,7 @@ void rx_parser(void)  //to get read from cb and execute a command if any, using 
       strcpy(state, "CHECK_EN");
       // buf_write('\0')
       cmd_buf[cmd_buf_ind++] = '\0';
+      wait_for_EN_bytes = millis();
     }
     else
     {
@@ -570,11 +600,12 @@ void rx_parser(void)  //to get read from cb and execute a command if any, using 
       cmd_buf[cmd_buf_ind++] = c;
     }
   }
-  if (!strcmp(state, "CHECK_EN"))
+  if (!strcmp(state, "CHECK_EN") && (millis() - wait_for_EN_bytes > 10))
   {
     Serial.println("CHECK_EN");
-    char c1,c2,c3;
-    if (((c1 = cb_read()) == 'E') && ((c2 = cb_read()) == 'N') && ((c3 = cb_read()) == '>'))
+    char c4,c5,c6;
+    c4 = c5 = c6 = 0;
+    if (((c4 = cb_read()) == 'E') && ((c5 = cb_read()) == 'N') && ((c6 = cb_read()) == '>'))
     {
       // state = "IDLE";
       strcpy(state, "IDLE");
@@ -631,6 +662,7 @@ void cmd_exec (char buf[])
       {
         val[j] = 0;
       }
+      Serial.println(val[j]);
     }
 
     analogWrite(PWM_PIN_A, val[0]);
@@ -651,6 +683,14 @@ void cmd_exec (char buf[])
   else if ( !strcmp(cmd, "RBOT"))
   {
     SCB_AIRCR = 0x05FA0004;
+    return;
+  }
+  else if ( !strcmp(cmd, "STAT"))
+  {
+    Serial.println(imuPacket_A.initFlag);
+    Serial.println(imuPacket_B.initFlag);
+    Serial.println(barPacket.initFlag);
+    delay(1000);
     return;
   }
   else if ( !strcmp(cmd, "PING"))
@@ -690,6 +730,20 @@ void build_sensor_packet(void)
   uint8_t header = 0xAA;
   // Serial.write(&header, 1);
   // Serial.write((uint8_t*)&unifiedSensor, sizeof(unifiedSensor));
+
+  Serial.println(unifiedSensor.bar);
+  Serial.println(unifiedSensor.enc1);
+  Serial.println(unifiedSensor.enc2);
+  Serial.println(unifiedSensor.rang1);
+  Serial.println(unifiedSensor.rang2);
+  Serial.println(unifiedSensor.imu1[0]);
+  Serial.println(unifiedSensor.imu1[1]);
+  Serial.println(unifiedSensor.imu1[2]);
+  Serial.println(unifiedSensor.imu1[3]);
+  Serial.println(unifiedSensor.imu2[0]);
+  Serial.println(unifiedSensor.imu2[1]);
+  Serial.println(unifiedSensor.imu2[2]);
+  Serial.println(unifiedSensor.imu2[3]);
 }
 //------------------------------------------------------
 

@@ -55,13 +55,21 @@ float fluidDensity = 997;
 
 //LYP-08 Ranging Sensor
 //--------------------------
-#define TriggerPin 29 //TX pin for ranging 1 
-uint8_t buf[16];
-int range_rx_index = 0;
-bool trigDone = false;
-bool readDone = false;
-long unsigned int T1_delay;
-int cmd_i;
+#define TriggerPin_A 35   //29 //TX pin for ranging 1 
+uint8_t buf_A[16];
+int range_rx_index_A = 0;
+bool trigDone_A = false;
+bool readDone_A = false;
+long unsigned int T1_delay_A;
+int cmd_i_A;
+
+#define TriggerPin_B 29   //29 //TX pin for ranging 1 
+uint8_t buf_B[16];
+int range_rx_index_B = 0;
+bool trigDone_B = false;
+bool readDone_B = false;
+long unsigned int T1_delay_B;
+int cmd_i_B;
 //-----------------------------
 
 
@@ -86,7 +94,8 @@ sh2_SensorValue_t imu_value_A, imu_value_B;
 unsigned int main_timer = 0;
 
 int barTimer = 0;
-int rangingTimer = 0;
+int rangingTimer_A = 0;
+int rangingTimer_B = 0;
 int imuTimer = 0;
 
 unsigned int wait_for_ST_bytes = 0;
@@ -98,8 +107,8 @@ unsigned int wait_for_EN_bytes = 0;
 //---------------------------
 struct
 {
-  int temp;
-  int depth;
+  float temp;
+  float depth;
   int pressure;
   bool initFlag;
 }barPacket;
@@ -108,7 +117,7 @@ struct
 {
   int long distance;
   bool initFlag;
-}rangingPacket_A;
+}rangingPacket_A, rangingPacket_B;
 
 
 struct
@@ -143,8 +152,9 @@ struct sensorBig        //Stores all sensors' packet
 
 //Sampling time period for each Sensor
 //-----------------------------
-long unsigned int barTP_rx =  33;//30Hz;
-long unsigned int rangingTP_rx = 33; //30Hz;
+long unsigned int barTP_rx =  330;//30Hz;
+long unsigned int rangingTP_rx_A = 33; //30Hz;
+long unsigned int rangingTP_rx_B = 33;
 long unsigned int imuTP_rx = 5;
 //------------------------------
 
@@ -177,12 +187,20 @@ void setup()
   Serial.println("Setup started");
 
   Serial.println("Inside void setup");
-  Serial7.begin(115200);                              //RANGING SENSOR
-  pinMode(TriggerPin, OUTPUT);                        //Used to send low pulse for starting communication
-  digitalWrite(TriggerPin, HIGH);
+
+  Serial8.begin(115200);                              //RANGING SENSOR_A
+  pinMode(TriggerPin_A, OUTPUT);                        //Used to send low pulse for starting communication
+  digitalWrite(TriggerPin_A, HIGH);
   delay(500);
-  trigDone = false;
-  T1_delay = 0;                                       //To wait after sending low pulse to complete receiving full data
+  trigDone_A = false;
+  T1_delay_A = 0;                                       //To wait after sending low pulse to complete receiving full data
+
+  Serial7.begin(115200);                              //RANGING SENSOR_B
+  pinMode(TriggerPin_B, OUTPUT);                        //Used to send low pulse for starting communication
+  digitalWrite(TriggerPin_B, HIGH);
+  delay(500);
+  trigDone_B = false;
+  T1_delay_B = 0;                                       //To wait after sending low pulse to complete receiving full data
 
   //I2C Lines
   unsigned int now = millis();
@@ -213,6 +231,7 @@ void setup()
 
 
   Wire1.begin();                                      //IMU_A
+  Wire.begin();                                      //IMU_B
   // Try to initialize!
   now = millis();
   if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
@@ -245,14 +264,14 @@ void setup()
 
   delay(100);
 
-  Wire.begin();                                      //IMU_B
+  // Wire.begin();                                      //IMU_B
   // Try to initialize!
   now = millis();
   if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
     Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
     // while (1) { delay(10); }
     imuPacket_B.initFlag = false;                   //not initialized
-    delay(10);          
+    delay(10000);          
   }
   else
   {
@@ -345,12 +364,15 @@ void loop()
     // Serial.println(millis());
     // Serial.println(micros());
     // Serial.println("HELLO");
-    if ( millis() - barTimer >= barTP_rx && (Wire2.available()))        //contains one pressure sensor
+    if ( millis() - barTimer >= barTP_rx) //&& (Wire2.available()))        //contains one pressure sensor
     {
       barTimer = millis();
       if ( barPacket.initFlag )
       {
+        barSensor.read();
+        // Serial.println("Bar sensor OK");
         barPacket.depth = (int)barSensor.depth();
+        // Serial.println(barSensor.depth());
         barPacket.temp = (int)barSensor.temperature();
         barPacket.pressure = (int)barSensor.pressure();
       // barSensorRead();
@@ -363,56 +385,111 @@ void loop()
       }
     }
 
-    if ( (millis() - rangingTimer >= rangingTP_rx) && (!trigDone))
+    if ( (millis() - rangingTimer_A >= rangingTP_rx_A) && (!trigDone_A))
     {
-      rangingTimer = millis();
-      digitalWrite(TriggerPin, LOW);
+      rangingTimer_A = millis();
+      digitalWrite(TriggerPin_A, LOW);
       delayMicroseconds(500);
-      digitalWrite(TriggerPin, HIGH);
-      T1_delay = millis();
-      trigDone = true;
-      range_rx_index = 0;
+      digitalWrite(TriggerPin_A, HIGH);
+      T1_delay_A = millis();
+      trigDone_A = true;
+      range_rx_index_A = 0;
       // triggerSensor();
       // debugRawBytes();
     }
 
     
-    if ( trigDone && ((millis() - T1_delay) >= 10) )
+    if ( trigDone_A && ((millis() - T1_delay_A) >= 10) )
     {
-      if ( range_rx_index < 4 )      //replaced while with if
+      if ( range_rx_index_A < 4 )      //replaced while with if
       {
-        if ( Serial7.available() )
+        if ( Serial8.available() )
         {
-          buf[range_rx_index++] = Serial7.read();
+          buf_A[range_rx_index_A++] = Serial8.read();
         }
       }
       else
-        readDone = true;
+        readDone_A = true;
     }
 
     
 
-    if ( readDone )       //oneshot
+    if ( readDone_A )       //oneshot
     {
-      if ( buf[0] == 0xFF )
+      if ( buf_A[0] == 0xFF )
       {
-        int calcsum = (buf[0] + buf[1] + buf[2]) & 0xFF;
-        if (calcsum == buf[3])
+        int calcsum_A = (buf_A[0] + buf_A[1] + buf_A[2]) & 0xFF;
+        if (calcsum_A == buf_A[3])
         {
-          rangingPacket_A.distance = buf[1] * 256 + buf[2];
-          trigDone = false;
-          readDone = false;
+          rangingPacket_A.distance = buf_A[1] * 256 + buf_A[2];
+          trigDone_A = false;
+          readDone_A = false;
         }
         else
         {
           //CHECKSUM ERROR
-          trigDone = false;
-          readDone = false;
+          trigDone_A = false;
+          readDone_A = false;
         }
       }
       //HEADER NOT MATCHED
-      trigDone = false;
-      readDone = false;
+      trigDone_A = false;
+      readDone_A = false;
+    }
+
+
+
+
+    if ( (millis() - rangingTimer_B >= rangingTP_rx_B) && (!trigDone_B))
+    {
+      rangingTimer_B = millis();
+      digitalWrite(TriggerPin_B, LOW);
+      delayMicroseconds(500);
+      digitalWrite(TriggerPin_B, HIGH);
+      T1_delay_B = millis();
+      trigDone_B = true;
+      range_rx_index_B = 0;
+      // triggerSensor();
+      // debugRawBytes();
+    }
+
+    
+    if ( trigDone_B && ((millis() - T1_delay_B) >= 10) )
+    {
+      if ( range_rx_index_B < 4 )      //replaced while with if
+      {
+        if ( Serial7.available() )
+        {
+          buf_B[range_rx_index_B++] = Serial7.read();
+        }
+      }
+      else
+        readDone_B = true;
+    }
+
+    
+
+    if ( readDone_B )       //oneshot
+    {
+      if ( buf_B[0] == 0xFF )
+      {
+        int calcsum_B = (buf_B[0] + buf_B[1] + buf_B[2]) & 0xFF;
+        if (calcsum_B == buf_B[3])
+        {
+          rangingPacket_B.distance = buf_B[1] * 256 + buf_B[2];
+          trigDone_B = false;
+          readDone_B = false;
+        }
+        else
+        {
+          //CHECKSUM ERROR
+          trigDone_B = false;
+          readDone_B = false;
+        }
+      }
+      //HEADER NOT MATCHED
+      trigDone_B = false;
+      readDone_B = false;
     }
 
 
@@ -421,17 +498,22 @@ void loop()
     {
       imuTimer = millis();
       if ( imuPacket_A.initFlag )
+      // if ( bno08x_A.getSensorEvent(&imu_value_A) )
       {
         bno08x_A.getSensorEvent(&imu_value_A);
         // Serial.println("updating imu value");
         // Serial.println(imu_value_A.sensorId);
+        Serial.println("IMU Packet initialized");
+        Serial.println(imu_value_A.sensorId);
         switch (imu_value_A.sensorId)
         {
           case SH2_GAME_ROTATION_VECTOR:
             imuPacket_A.real = imu_value_A.un.gameRotationVector.real;
+            // Serial.println(imu_value_A.un.gameRotationVector.real);
             imuPacket_A.i = imu_value_A.un.gameRotationVector.i;
             imuPacket_A.j = imu_value_A.un.gameRotationVector.j;
             imuPacket_A.k = imu_value_A.un.gameRotationVector.k;
+            Serial.println("Correct Case");
             // Serial.println("Setting IMU packet");
             // Serial.println(imu_value_A.un.gameRotationVector.real);
             // Serial.println(imu_value_A.un.gameRotationVector.i);
@@ -717,7 +799,7 @@ void build_sensor_packet(void)
   unifiedSensor.enc1 = encoderPacket_A.encoder_copy;
   unifiedSensor.enc2 = encoderPacket_B.encoder_copy;
   unifiedSensor.rang1 = rangingPacket_A.distance;
-  unifiedSensor.rang2 = rangingPacket_A.distance;
+  unifiedSensor.rang2 = rangingPacket_B.distance;
   
   unifiedSensor.imu1[0] = imuPacket_A.real;
   unifiedSensor.imu1[1] = imuPacket_A.i;
@@ -733,15 +815,17 @@ void build_sensor_packet(void)
   // Serial.write(&header, 1);
   // Serial.write((uint8_t*)&unifiedSensor, sizeof(unifiedSensor));
 
+  Serial.println("Sensors:");
   // Serial.println(unifiedSensor.bar);
-  Serial.println(unifiedSensor.enc1);
+  Serial.println();
+  // Serial.println(unifiedSensor.enc1);
   // Serial.println(unifiedSensor.enc2);
   // Serial.println(unifiedSensor.rang1);
   // Serial.println(unifiedSensor.rang2);
-  // Serial.println(unifiedSensor.imu1[0]);
-  // Serial.println(unifiedSensor.imu1[1]);
-  // Serial.println(unifiedSensor.imu1[2]);
-  // Serial.println(unifiedSensor.imu1[3]);
+  Serial.println(unifiedSensor.imu1[0]);
+  Serial.println(unifiedSensor.imu1[1]);
+  Serial.println(unifiedSensor.imu1[2]);
+  Serial.println(unifiedSensor.imu1[3]);
   // Serial.println(unifiedSensor.imu2[0]);
   // Serial.println(unifiedSensor.imu2[1]);
   // Serial.println(unifiedSensor.imu2[2]);

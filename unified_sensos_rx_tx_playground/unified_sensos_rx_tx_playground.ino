@@ -151,10 +151,11 @@ long unsigned int imuTP_rx = 5;
 
 //Timer Interrupts declared
 //----------------------------
-IntervalTimer barTimer_tx;
-IntervalTimer rangingTimer_tx;
-IntervalTimer encoderTimer_tx_A, encoderTimer_tx_B;
-IntervalTimer Pi_rx;
+// IntervalTimer barTimer_tx;
+// IntervalTimer rangingTimer_tx;
+IntervalTimer encoderTimer_tx_A;
+IntervalTimer encoderTimer_tx_B;
+// IntervalTimer Pi_rx;
 IntervalTimer rx_storer;     //To store incoming bytes in the circ buffer for command reading
 //-----------------------------
 
@@ -286,11 +287,11 @@ void setup()
   // barTimer_tx.priority(4);
 
   //Interrupts Begin
-  barTimer_tx.begin(barSend, 50000); //20Hz         //INTERRUPTS setting timers
+  // barTimer_tx.begin(barSend, 50000); //20Hz         //INTERRUPTS setting timers
 
-  rangingTimer_tx.begin(rangingSend, 66000);  //15Hz
+  // rangingTimer_tx.begin(rangingSend, 66000);  //15Hz
 
-  // encoderTimer_tx_A.begin(encoderSend_A, 70000);   //70Khz
+  encoderTimer_tx_A.begin(encoderSend_A, 70000);   //70Khz
   encoderTimer_tx_B.begin(encoderSend_B, 70000);   //70Khz
   
   // Pi_rx.begin(piReceive, 50000);              //20Hz
@@ -337,6 +338,7 @@ void loop()
 {
   if ( millis() - main_timer > 25)    //40Hz
   {
+    Serial.println("HELLO");
     // Serial.println("IN VOID LOOP");
     timestamp = micros();
     // Serial.println(timestamp);
@@ -731,40 +733,40 @@ void build_sensor_packet(void)
   // Serial.write(&header, 1);
   // Serial.write((uint8_t*)&unifiedSensor, sizeof(unifiedSensor));
 
-  Serial.println(unifiedSensor.bar);
+  // Serial.println(unifiedSensor.bar);
   Serial.println(unifiedSensor.enc1);
-  Serial.println(unifiedSensor.enc2);
-  Serial.println(unifiedSensor.rang1);
-  Serial.println(unifiedSensor.rang2);
-  Serial.println(unifiedSensor.imu1[0]);
-  Serial.println(unifiedSensor.imu1[1]);
-  Serial.println(unifiedSensor.imu1[2]);
-  Serial.println(unifiedSensor.imu1[3]);
-  Serial.println(unifiedSensor.imu2[0]);
-  Serial.println(unifiedSensor.imu2[1]);
-  Serial.println(unifiedSensor.imu2[2]);
-  Serial.println(unifiedSensor.imu2[3]);
+  // Serial.println(unifiedSensor.enc2);
+  // Serial.println(unifiedSensor.rang1);
+  // Serial.println(unifiedSensor.rang2);
+  // Serial.println(unifiedSensor.imu1[0]);
+  // Serial.println(unifiedSensor.imu1[1]);
+  // Serial.println(unifiedSensor.imu1[2]);
+  // Serial.println(unifiedSensor.imu1[3]);
+  // Serial.println(unifiedSensor.imu2[0]);
+  // Serial.println(unifiedSensor.imu2[1]);
+  // Serial.println(unifiedSensor.imu2[2]);
+  // Serial.println(unifiedSensor.imu2[3]);
 }
 //------------------------------------------------------
 
 
 
-void barSend ()
-{
-  // uint8_t buf[] = {barPacket.depth, barPacket.pressure, barPacket.temp};    //THIS WILL CAUSE PROBLEMS LATER, PLEASE FIX IT LATER ACCORDING TO RX DATA FROM RASPBERRY PI
-  // Serial.write(buf, sizeof(buf));
-  // Serial.println("bar packet");
-  // Serial.println(barPacket.temp);
-  // Serial.println();
-}
+// void barSend ()
+// {
+//   // uint8_t buf[] = {barPacket.depth, barPacket.pressure, barPacket.temp};    //THIS WILL CAUSE PROBLEMS LATER, PLEASE FIX IT LATER ACCORDING TO RX DATA FROM RASPBERRY PI
+//   // Serial.write(buf, sizeof(buf));
+//   // Serial.println("bar packet");
+//   // Serial.println(barPacket.temp);
+//   // Serial.println();
+// }
 
-void rangingSend ()
-{
-  // Serial.write(rangingPacket.distance);
-  // Serial.println("ranging packet");
-  // Serial.println(rangingPacket.distance);
-  // Serial.println();
-}
+// void rangingSend ()
+// {
+//   // Serial.write(rangingPacket.distance);
+//   // Serial.println("ranging packet");
+//   // Serial.println(rangingPacket.distance);
+//   // Serial.println();
+// }
 
 void encoderSend_A ()
 {

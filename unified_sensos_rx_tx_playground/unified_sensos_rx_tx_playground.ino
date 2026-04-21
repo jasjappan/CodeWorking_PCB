@@ -1,6 +1,7 @@
 #include<Wire.h>
 #include<Updated_MS5837.hpp>
 #include <Adafruit_BNO08x.h>
+#include <EEPROM.h>
 
 //Circular Buffer
 //--------------------------------
@@ -146,6 +147,37 @@ struct sensorBig        //Stores all sensors' packet
   int enc1;
   int enc2;
 }unifiedSensor;
+
+
+// EEPROM
+//------------------------------
+int rebootAdr = 0;    //used to see if this is the first boot up or not
+int adrSelEnc = 1;    //used to see which encoder to select
+int adrEncA = 3;      //used to get encoderValueA if this is not the first boot
+int adrEncB = 7;      //used to get encoderValueB if this is not the first boot
+byte selectEncA;
+byte firstBoot;
+//------------------------------
+
+
+//Persisting Data after software reboot
+//--------------------------------------------------------
+// struct PersistData
+// {
+//   uint32_t magic;
+//   uint8_t imu_flag;
+//   long encoder_A;
+//   long encoder_B;
+// };
+
+// __attribute__((section(".noinit"))) PersistData persist;
+
+// #define PERSIST_MAGIC 0x11000011
+
+
+
+//---------------------------------------------------------
+
 //-----------------------------
 
 
@@ -207,10 +239,50 @@ void setup()
   Wire2.begin();                                      //PRESSURE SENSOR
   while(!(barPacket.initFlag = barSensor.init(Wire2)) && ( millis() - now < 10000 ))   //wait for 10 seconds
   {
-    delay(1000);
+    delay(10);
+    Serial.println("Bar Failing..");
   }
   barSensor.setModel(MS5837::MS5837_30BA);
   barSensor.setFluidDensity(fluidDensity);
+  Serial.println("Bar success");
+
+  // if ( persist.magic != PERSIST_MAGIC )     //for first boot
+  // {
+  //   // Serial.println("")
+  //   persist.magic = PERSIST_MAGIC;
+  //   persist.imu_flag = 1;
+  //   persist.encoder_A = 0;
+  //   persist.encoder_B = 0;
+  //   Serial.println("First boot");
+  // }
+  // else
+  // {
+  //   Serial.println("Function rebooted");
+  // }
+
+  // Serial.println("Persist part done");
+
+  EEPROM.get(rebootAdr, firstBoot);
+  if ( firstBoot )      //if firstBoot is set
+  {
+    encoderValue_A = 0;
+    encoderValue_B = 0;
+    selectEncA = 1;
+  }
+  else                  //if firstBoot is not set
+  {
+    long encA_copy, encB_copy;
+    EEPROM.get(adrSelEnc, selectEncA);
+    EEPROM.get(adrEncA, encA_copy);
+    EEPROM.get(adrEncB, encB_copy);
+    EEPROM.put(rebootAdr, 0);
+    encoderValue_A = encA_copy;
+    encoderValue_B = encB_copy;
+    Serial.println(selectEncA);
+  }
+
+  // encoderValue_A = persist.encoder_A;   //taken from last boot
+  // encoderValue_B = persist.encoder_B;
 
   // Interrupt Sensor(Encoder as can't miss a single pulse)
   pinMode(EncoderPin1_A, INPUT);                        //ENCODER A
@@ -229,74 +301,108 @@ void setup()
   pinMode(PWM_PIN_B, OUTPUT);
   pinMode(DIR_PIN_B, OUTPUT);
 
+  Serial.println("Encoder part done");
 
   Wire1.begin();                                      //IMU_A
   Wire.begin();                                      //IMU_B
   // Try to initialize!
   now = millis();
-  if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
-    Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
-    // while (1) { delay(10); }
-    imuPacket_A.initFlag = false;     //not initialized 
-    delay(10);          
+  if ( selectEncA )
+  {
+    if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
+      Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
+      // while (1) { delay(10); }
+      imuPacket_A.initFlag = false;     //not initialized 
+      delay(10);          
+    }
+    else
+    {
+      Serial.println("BNO08x_A Found!");  
+      imuPacket_A.initFlag = true;      //initialized
+      for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
+        Serial.print("Part ");
+        Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
+        Serial.print(": Version :");
+        Serial.print(bno08x_A.prodIds.entry[n].swVersionMajor);
+        Serial.print(".");
+        Serial.print(bno08x_A.prodIds.entry[n].swVersionMinor);
+        Serial.print(".");
+        Serial.print(bno08x_A.prodIds.entry[n].swVersionPatch);
+        Serial.print(" Build ");
+        Serial.println(bno08x_A.prodIds.entry[n].swBuildNumber);
+      }
+
+      setReports_A();                                     //Important: Used to set what we will get from IMU
+
+      Serial.println("Reading events IMU_A");
+    }
   }
+
   else
   {
-    Serial.println("BNO08x_A Found!");  
-    imuPacket_A.initFlag = true;      //initialized
-    for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
-      Serial.print("Part ");
-      Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
-      Serial.print(": Version :");
-      Serial.print(bno08x_A.prodIds.entry[n].swVersionMajor);
-      Serial.print(".");
-      Serial.print(bno08x_A.prodIds.entry[n].swVersionMinor);
-      Serial.print(".");
-      Serial.print(bno08x_A.prodIds.entry[n].swVersionPatch);
-      Serial.print(" Build ");
-      Serial.println(bno08x_A.prodIds.entry[n].swBuildNumber);
+    if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
+      Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
+      // while (1) { delay(10); }
+      imuPacket_B.initFlag = false;                   //not initialized
+      delay(10000);          
     }
+    else
+    {
+      Serial.println("BNO08x_B Found!");
+      imuPacket_B.initFlag = true;                    //initialized
+      for (int n = 0; n < bno08x_B.prodIds.numEntries; n++) {
+        Serial.print("Part ");
+        Serial.print(bno08x_B.prodIds.entry[n].swPartNumber);
+        Serial.print(": Version :");
+        Serial.print(bno08x_B.prodIds.entry[n].swVersionMajor);
+        Serial.print(".");
+        Serial.print(bno08x_B.prodIds.entry[n].swVersionMinor);
+        Serial.print(".");
+        Serial.print(bno08x_B.prodIds.entry[n].swVersionPatch);
+        Serial.print(" Build ");
+        Serial.println(bno08x_B.prodIds.entry[n].swBuildNumber);
+        delay(1000);
+      }
 
-    setReports_A();                                     //Important: Used to set what we will get from IMU
+      setReports_B();                                     //Important: Used to set what we will get from IMU
 
-    Serial.println("Reading events IMU_A");
+
+      Serial.println("Reading events IMU_B");
+    }
   }
-
+  Serial.println("IMU part done");
   delay(100);
 
-  // Wire.begin();                                      //IMU_B
-  // Try to initialize!
-  now = millis();
-  if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
-    Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
-    // while (1) { delay(10); }
-    imuPacket_B.initFlag = false;                   //not initialized
-    delay(10000);          
-  }
-  else
-  {
-    Serial.println("BNO08x_B Found!");
-    imuPacket_B.initFlag = true;                    //initialized
-    for (int n = 0; n < bno08x_B.prodIds.numEntries; n++) {
-      Serial.print("Part ");
-      Serial.print(bno08x_B.prodIds.entry[n].swPartNumber);
-      Serial.print(": Version :");
-      Serial.print(bno08x_B.prodIds.entry[n].swVersionMajor);
-      Serial.print(".");
-      Serial.print(bno08x_B.prodIds.entry[n].swVersionMinor);
-      Serial.print(".");
-      Serial.print(bno08x_B.prodIds.entry[n].swVersionPatch);
-      Serial.print(" Build ");
-      Serial.println(bno08x_B.prodIds.entry[n].swBuildNumber);
-    }
+  // now = millis();
+  // if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
+  //   Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
+  //   // while (1) { delay(10); }
+  //   imuPacket_A.initFlag = false;     //not initialized 
+  //   delay(10);          
+  // }
+  // else
+  // {
+  //   Serial.println("BNO08x_A Found!");  
+  //   imuPacket_A.initFlag = true;      //initialized
+  //   for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
+  //     Serial.print("Part ");
+  //     Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
+  //     Serial.print(": Version :");
+  //     Serial.print(bno08x_A.prodIds.entry[n].swVersionMajor);
+  //     Serial.print(".");
+  //     Serial.print(bno08x_A.prodIds.entry[n].swVersionMinor);
+  //     Serial.print(".");
+  //     Serial.print(bno08x_A.prodIds.entry[n].swVersionPatch);
+  //     Serial.print(" Build ");
+  //     Serial.println(bno08x_A.prodIds.entry[n].swBuildNumber);
+  //   }
 
-    setReports_B();                                     //Important: Used to set what we will get from IMU
+  //   setReports_A();                                     //Important: Used to set what we will get from IMU
 
+  //   Serial.println("Reading events IMU_A");
+  // }
 
-    Serial.println("Reading events IMU_B");
-  }
-
-  delay(100);
+  // delay(100);
 
   //Interrupts Priority   !!change priority according to the rule => Highest for encoder receiving; then after that; higher priority for less frequently occuring events i.e. those with bigger time period
   // encoderTimer_tx_A.priority(1);
@@ -783,6 +889,30 @@ void cmd_exec (char buf[])
     delay(1000);
     return;
   }
+  else if ( !strcmp(cmd, "SELA"))
+  {
+    if ( !imuPacket_A.initFlag )
+    {
+      // selectIMU_A();
+      // imuPacket_B.initFlag = false;
+      rebootSaveState(1);
+    }
+    else
+      Serial.println("Already Chosen");
+    delay(1000);
+  }
+  else if ( !strcmp(cmd, "SELB"))
+  {
+    if ( !imuPacket_B.initFlag )
+    {
+      // selectIMU_B();
+      // imuPacket_A.initFlag = false;
+      rebootSaveState(0);
+    }
+    else
+      Serial.println("Already chosen");
+    delay(1000);
+  }
   else
   {
     Serial.println("WrngCmd");
@@ -826,14 +956,108 @@ void build_sensor_packet(void)
   Serial.println(unifiedSensor.imu1[1]);
   Serial.println(unifiedSensor.imu1[2]);
   Serial.println(unifiedSensor.imu1[3]);
-  // Serial.println(unifiedSensor.imu2[0]);
-  // Serial.println(unifiedSensor.imu2[1]);
-  // Serial.println(unifiedSensor.imu2[2]);
-  // Serial.println(unifiedSensor.imu2[3]);
+  Serial.println(unifiedSensor.imu2[0]);
+  Serial.println(unifiedSensor.imu2[1]);
+  Serial.println(unifiedSensor.imu2[2]);
+  Serial.println(unifiedSensor.imu2[3]);
 }
 //------------------------------------------------------
 
 
+void rebootSaveState ( uint8_t imu )
+{
+  noInterrupts();
+  // persist.imu_flag = imu;
+  // persist.encoder_A = encoderValue_A;
+  // persist.encoder_B = encoderValue_B;
+  long copyA = encoderValue_A;
+  long copyB = encoderValue_B;
+  Serial.println(encoderValue_A);
+  Serial.println(encoderValue_B);
+  EEPROM.put(adrSelEnc, imu);
+  EEPROM.put(adrEncA, copyA);
+  EEPROM.put(adrEncB, copyB);
+  EEPROM.update(rebootAdr, 0);      //firstBoot un set to show not first boot for next booting
+
+  SCB_AIRCR = 0x05FA0004;
+}
+
+
+// void selectIMU_A ( void )
+// {
+//   Wire1.begin();
+//   // Adafruit_BNO08x bno08x_A(BNO08X_RESET);
+//   if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
+//     Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
+//     // while (1) { delay(10); }
+//     imuPacket_A.initFlag = false;     //not initialized 
+//     delay(10);          
+//   }
+//   else
+//   {
+//     Serial.println("BNO08x_A Found!");  
+//     imuPacket_A.initFlag = true;      //initialized
+//     for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
+//       Serial.print("Part ");
+//       Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
+//       Serial.print(": Version :");
+//       Serial.print(bno08x_A.prodIds.entry[n].swVersionMajor);
+//       Serial.print(".");
+//       Serial.print(bno08x_A.prodIds.entry[n].swVersionMinor);
+//       Serial.print(".");
+//       Serial.print(bno08x_A.prodIds.entry[n].swVersionPatch);
+//       Serial.print(" Build ");
+//       Serial.println(bno08x_A.prodIds.entry[n].swBuildNumber);
+//     }
+
+//     // setReports_A();                                     //Important: Used to set what we will get from IMU
+
+//     Serial.println("Setting desired reports");
+//     if (! bno08x_A.enableReport(SH2_GAME_ROTATION_VECTOR)) {
+//       Serial.println("Could not enable game vector");
+//     }
+//     else
+//       Serial.println("game vector enabled");
+//   }
+// }
+
+// void selectIMU_B ( void )
+// {
+//   Wire.begin();
+//   // Adafruit_BNO08x bno08x_B(BNO08X_RESET);
+//   if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
+//     Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
+//     // while (1) { delay(10); }
+//     imuPacket_B.initFlag = false;     //not initialized 
+//     delay(10);          
+//   }
+//   else
+//   {
+//     Serial.println("BNO08x_B Found!");  
+//     imuPacket_B.initFlag = true;      //initialized
+//     for (int n = 0; n < bno08x_B.prodIds.numEntries; n++) {
+//       Serial.print("Part ");
+//       Serial.print(bno08x_B.prodIds.entry[n].swPartNumber);
+//       Serial.print(": Version :");
+//       Serial.print(bno08x_B.prodIds.entry[n].swVersionMajor);
+//       Serial.print(".");
+//       Serial.print(bno08x_B.prodIds.entry[n].swVersionMinor);
+//       Serial.print(".");
+//       Serial.print(bno08x_B.prodIds.entry[n].swVersionPatch);
+//       Serial.print(" Build ");
+//       Serial.println(bno08x_B.prodIds.entry[n].swBuildNumber);
+//     }
+
+//     // setReports_B();                                     //Important: Used to set what we will get from IMU
+
+//     Serial.println("Setting desired reports");
+//     if (! bno08x_B.enableReport(SH2_GAME_ROTATION_VECTOR)) {
+//       Serial.println("Could not enable game vector");
+//     }
+//     else
+//       Serial.println("game vector enabled");
+//   }
+// }
 
 // void barSend ()
 // {

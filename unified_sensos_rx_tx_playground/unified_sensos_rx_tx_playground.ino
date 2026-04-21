@@ -2,6 +2,8 @@
 #include<Updated_MS5837.hpp>
 #include <Adafruit_BNO08x.h>
 #include <EEPROM.h>
+#include <SD.h>
+#include <SPI.h>
 
 //Circular Buffer
 //--------------------------------
@@ -160,6 +162,13 @@ byte firstBoot;
 //------------------------------
 
 
+// SD Card
+//--------------------------------
+File logFile;
+const int chipSelect = BUILTIN_SDCARD;
+
+//--------------------------------
+
 //Persisting Data after software reboot
 //--------------------------------------------------------
 // struct PersistData
@@ -280,6 +289,14 @@ void setup()
     encoderValue_B = encB_copy;
     Serial.println(selectEncA);
   }
+
+  if ( !SD.begin(chipSelect) )
+  {
+    Serial.println("SD Card initialization failed");
+  }
+
+  logFile = SD.open("logFile.txt", FILE_WRITE);
+  logFile.println("New cycle");
 
   // encoderValue_A = persist.encoder_A;   //taken from last boot
   // encoderValue_B = persist.encoder_B;
@@ -870,11 +887,11 @@ void cmd_exec (char buf[])
     interrupts();
     return;
   }
-  else if ( !strcmp(cmd, "RBOT"))
-  {
-    SCB_AIRCR = 0x05FA0004;
-    return;
-  }
+  // else if ( !strcmp(cmd, "RBOT"))
+  // {
+  //   SCB_AIRCR = 0x05FA0004;
+  //   return;
+  // }
   else if ( !strcmp(cmd, "STAT"))
   {
     Serial.println(imuPacket_A.initFlag);
@@ -895,6 +912,8 @@ void cmd_exec (char buf[])
     {
       // selectIMU_A();
       // imuPacket_B.initFlag = false;
+      logFile.println("EOF");
+      logFile.close();
       rebootSaveState(1);
     }
     else
@@ -907,11 +926,28 @@ void cmd_exec (char buf[])
     {
       // selectIMU_B();
       // imuPacket_A.initFlag = false;
+      logFile.println("EOF");
+      logFile.close();
       rebootSaveState(0);
     }
     else
       Serial.println("Already chosen");
     delay(1000);
+  }
+  else if ( !strcmp(cmd, "STOP"))
+  {
+    logFile.println("EOF");
+    logFile.close();
+    noInterrupts();
+    EEPROM.put(firstBoot, 1);
+    long reset_enc = 0;
+    EEPROM.put(adrEncA, reset_enc);
+    EEPROM.put(adrEncB, reset_enc);
+    EEPROM.put(adrSelEnc, 1);
+    Serial.println("Sleeping for 10 seconds");
+    delay(1000);     //10sec delay without interrupts
+    SCB_AIRCR = 0x05FA0004;
+    return;
   }
   else
   {
@@ -960,6 +996,21 @@ void build_sensor_packet(void)
   Serial.println(unifiedSensor.imu2[1]);
   Serial.println(unifiedSensor.imu2[2]);
   Serial.println(unifiedSensor.imu2[3]);
+
+  logFile.println(unifiedSensor.bar);
+  logFile.println(unifiedSensor.enc1);
+  logFile.println(unifiedSensor.enc2);
+  logFile.println(unifiedSensor.rang1);
+  logFile.println(unifiedSensor.rang2);
+  logFile.println(unifiedSensor.imu1[0]);
+  logFile.println(unifiedSensor.imu1[1]);
+  logFile.println(unifiedSensor.imu1[2]);
+  logFile.println(unifiedSensor.imu1[3]);
+  logFile.println(unifiedSensor.imu2[0]);
+  logFile.println(unifiedSensor.imu2[1]);
+  logFile.println(unifiedSensor.imu2[2]);
+  logFile.println(unifiedSensor.imu2[3]);
+  logFile.println();
 }
 //------------------------------------------------------
 
@@ -978,7 +1029,6 @@ void rebootSaveState ( uint8_t imu )
   EEPROM.put(adrEncA, copyA);
   EEPROM.put(adrEncB, copyB);
   EEPROM.update(rebootAdr, 0);      //firstBoot un set to show not first boot for next booting
-
   SCB_AIRCR = 0x05FA0004;
 }
 

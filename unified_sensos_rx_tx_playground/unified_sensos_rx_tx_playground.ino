@@ -816,12 +816,12 @@ void build_sensor_packet(void)
   // Serial.write((uint8_t*)&unifiedSensor, sizeof(unifiedSensor));
 
   Serial.println("Sensors:");
-  // Serial.println(unifiedSensor.bar);
+  Serial.println(unifiedSensor.bar);
   Serial.println();
-  // Serial.println(unifiedSensor.enc1);
-  // Serial.println(unifiedSensor.enc2);
-  // Serial.println(unifiedSensor.rang1);
-  // Serial.println(unifiedSensor.rang2);
+  Serial.println(unifiedSensor.enc1);
+  Serial.println(unifiedSensor.enc2);
+  Serial.println(unifiedSensor.rang1);
+  Serial.println(unifiedSensor.rang2);
   Serial.println(unifiedSensor.imu1[0]);
   Serial.println(unifiedSensor.imu1[1]);
   Serial.println(unifiedSensor.imu1[2]);

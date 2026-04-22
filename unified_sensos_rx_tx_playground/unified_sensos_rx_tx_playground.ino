@@ -934,6 +934,23 @@ void cmd_exec (char buf[])
       Serial.println("Already chosen");
     delay(1000);
   }
+  else if ( !strcmp(cmd, "LOGD"))
+  {
+    logFile.println(unifiedSensor.bar);
+    logFile.println(unifiedSensor.enc1);
+    logFile.println(unifiedSensor.enc2);
+    logFile.println(unifiedSensor.rang1);
+    logFile.println(unifiedSensor.rang2);
+    logFile.println(unifiedSensor.imu1[0]);
+    logFile.println(unifiedSensor.imu1[1]);
+    logFile.println(unifiedSensor.imu1[2]);
+    logFile.println(unifiedSensor.imu1[3]);
+    logFile.println(unifiedSensor.imu2[0]);
+    logFile.println(unifiedSensor.imu2[1]);
+    logFile.println(unifiedSensor.imu2[2]);
+    logFile.println(unifiedSensor.imu2[3]);
+    logFile.println();
+  }
   else if ( !strcmp(cmd, "STOP"))
   {
     logFile.println("EOF");
@@ -997,20 +1014,20 @@ void build_sensor_packet(void)
   Serial.println(unifiedSensor.imu2[2]);
   Serial.println(unifiedSensor.imu2[3]);
 
-  logFile.println(unifiedSensor.bar);
-  logFile.println(unifiedSensor.enc1);
-  logFile.println(unifiedSensor.enc2);
-  logFile.println(unifiedSensor.rang1);
-  logFile.println(unifiedSensor.rang2);
-  logFile.println(unifiedSensor.imu1[0]);
-  logFile.println(unifiedSensor.imu1[1]);
-  logFile.println(unifiedSensor.imu1[2]);
-  logFile.println(unifiedSensor.imu1[3]);
-  logFile.println(unifiedSensor.imu2[0]);
-  logFile.println(unifiedSensor.imu2[1]);
-  logFile.println(unifiedSensor.imu2[2]);
-  logFile.println(unifiedSensor.imu2[3]);
-  logFile.println();
+  // logFile.println(unifiedSensor.bar);
+  // logFile.println(unifiedSensor.enc1);
+  // logFile.println(unifiedSensor.enc2);
+  // logFile.println(unifiedSensor.rang1);
+  // logFile.println(unifiedSensor.rang2);
+  // logFile.println(unifiedSensor.imu1[0]);
+  // logFile.println(unifiedSensor.imu1[1]);
+  // logFile.println(unifiedSensor.imu1[2]);
+  // logFile.println(unifiedSensor.imu1[3]);
+  // logFile.println(unifiedSensor.imu2[0]);
+  // logFile.println(unifiedSensor.imu2[1]);
+  // logFile.println(unifiedSensor.imu2[2]);
+  // logFile.println(unifiedSensor.imu2[3]);
+  // logFile.println();
 }
 //------------------------------------------------------
 

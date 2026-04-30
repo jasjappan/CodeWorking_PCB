@@ -58,7 +58,7 @@ void setReports(void) {
 
 
 void loop() {
-  delay(10);
+  delay(25);
 
   if (bno08x.wasReset()) {
     Serial.print("sensor was reset ");

@@ -1,8 +1,8 @@
-#define encoderPin1 10
-#define encoderPin2 11
+#define encoderPin1 8   //22  //10
+#define encoderPin2 12  //24  //11
 
-#define PWM_PIN 6
-#define DIR_PIN 7
+#define PWM_PIN A5      //6
+#define DIR_PIN 13      //26      //7
 
 #define CPR 2500
 #define COUNTS_PER_REV (CPR * 4)
@@ -11,7 +11,7 @@ volatile long encoderValue = 0;
 volatile int lastEncoded = 0;
 
 // User सेट
-int pwmValue = 0;   // 👈 change this (0–255)
+int pwmValue = 255;   // 👈 change this (0–255)
 
 float currentRPM = 0;
 
@@ -20,10 +20,10 @@ unsigned long lastTime = 0;
 long lastCount = 0;
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
-  pinMode(encoderPin1, INPUT);   // external pullups
-  pinMode(encoderPin2, INPUT);
+  pinMode(encoderPin1, INPUT_PULLUP);   // external pullups
+  pinMode(encoderPin2, INPUT_PULLUP);
 
   pinMode(PWM_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);

@@ -4,6 +4,8 @@
 #include <EEPROM.h>
 #include <SD.h>
 #include <SPI.h>
+#include <TinyGPS++.h>
+#include <math.h>
 
 //Circular Buffer
 //--------------------------------
@@ -87,6 +89,17 @@ sh2_SensorValue_t imu_value_A, imu_value_B;
 
 
 
+//micro m10 gps
+//-------------------------------
+// Choose a hardware serial port (Serial1, Serial2, etc.)
+#define GPS_SERIAL Serial1
+// #define DEG_TO_RAD 0.017453292519943295
+
+TinyGPSPlus gps;
+//--------------------------------
+
+
+
 //Sensor data to Raspberry Pi ( writtten in IntervalInterrupts in Seconds instead of Hz )
 // int barTP_tx = 20Hz;
 // int rangingTP_tx = 50Hz;
@@ -100,6 +113,7 @@ int barTimer = 0;
 int rangingTimer_A = 0;
 int rangingTimer_B = 0;
 int imuTimer = 0;
+int gpsTimer = 0;
 
 unsigned int wait_for_ST_bytes = 0;
 unsigned int wait_for_EN_bytes = 0;
@@ -125,11 +139,14 @@ struct
 
 struct
 {
-  float real;
-  float i;
-  float j;
-  float k;
-  bool initFlag;
+  float game_real;
+  float game_i;
+  float game_j;
+  float game_k;
+  float magnetic_x;
+  float magnetic_y;
+  float magnetic_z;
+  bool status;
 }imuPacket_A, imuPacket_B;
 
 struct
@@ -138,11 +155,19 @@ struct
   bool initFlag;
 }encoderPacket_A, encoderPacket_B;
 
+struct
+{
+  double easting;
+  double northing;
+  bool status;
+}gpsPacket;
+
 
 struct sensorBig        //Stores all sensors' packet
 {
-  float imu1[4];
-  float imu2[4];
+  float imu1[7];        //game vector[4] then magnetic field[3]
+  float imu2[7];
+  double gps[2];
   int bar;
   int rang1;
   int rang2;
@@ -197,6 +222,7 @@ long unsigned int barTP_rx =  330;//30Hz;
 long unsigned int rangingTP_rx_A = 33; //30Hz;
 long unsigned int rangingTP_rx_B = 33;
 long unsigned int imuTP_rx = 5;
+long unsigned int gpsTP_rx = 330;
 //------------------------------
 
 
@@ -243,10 +269,12 @@ void setup()
   trigDone_B = false;
   T1_delay_B = 0;                                       //To wait after sending low pulse to complete receiving full data
 
+  GPS_SERIAL.begin(115200);                     // M10 GPS - Serial1
+
   //I2C Lines
   unsigned int now = millis();
   Wire2.begin();                                      //PRESSURE SENSOR
-  while(!(barPacket.initFlag = barSensor.init(Wire2)) && ( millis() - now < 10000 ))   //wait for 10 seconds
+  while(!(barPacket.initFlag = barSensor.init(Wire2)) && ( millis() - now < 1000 ))   //wait for 1 seconds
   {
     delay(10);
     Serial.println("Bar Failing..");
@@ -329,13 +357,13 @@ void setup()
     if (!bno08x_A.begin_I2C(0x4A, &Wire1)) {
       Serial.println("Failed to find BNO08x_A chip");     //Need to reboot Teensy if it fails
       // while (1) { delay(10); }
-      imuPacket_A.initFlag = false;     //not initialized 
+      imuPacket_A.status = false;     //not initialized 
       delay(10);          
     }
     else
     {
       Serial.println("BNO08x_A Found!");  
-      imuPacket_A.initFlag = true;      //initialized
+      imuPacket_A.status = true;      //initialized
       for (int n = 0; n < bno08x_A.prodIds.numEntries; n++) {
         Serial.print("Part ");
         Serial.print(bno08x_A.prodIds.entry[n].swPartNumber);
@@ -360,13 +388,13 @@ void setup()
     if (!bno08x_B.begin_I2C(0x4A, &Wire)) {
       Serial.println("Failed to find BNO08x_B chip");     //Need to reboot Teensy if it fails
       // while (1) { delay(10); }
-      imuPacket_B.initFlag = false;                   //not initialized
+      imuPacket_B.status = false;                   //not initialized
       delay(10000);          
     }
     else
     {
       Serial.println("BNO08x_B Found!");
-      imuPacket_B.initFlag = true;                    //initialized
+      imuPacket_B.status = true;                    //initialized
       for (int n = 0; n < bno08x_B.prodIds.numEntries; n++) {
         Serial.print("Part ");
         Serial.print(bno08x_B.prodIds.entry[n].swPartNumber);
@@ -457,21 +485,34 @@ void setup()
 // Here is where you define the sensor outputs you want to receive
 void setReports_A(void) {
   Serial.println("Setting desired reports");
-  if (! bno08x_A.enableReport(SH2_GAME_ROTATION_VECTOR)) {
-    Serial.println("Could not enable game vector");
+  if (! bno08x_A.enableReport(SH2_ROTATION_VECTOR)) {
+    Serial.println("Could not enable rotation vector");
   }
   else
-    Serial.println("game vector enabled");
+    Serial.println("rotation vector enabled");
+
+  if (! bno08x_A.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED, 5000)) {
+    Serial.println("Could not enable magnetic field");
+  }
+  else
+    Serial.println("magnetic field enabled");
 }
 
 
 void setReports_B(void) {
   Serial.println("Setting desired reports");
-  if (! bno08x_B.enableReport(SH2_GAME_ROTATION_VECTOR)) {
-    Serial.println("Could not enable game vector");
+  if (! bno08x_B.enableReport(SH2_ROTATION_VECTOR)) {
+    Serial.println("Could not enable rotation vector");
   }
   else
-    Serial.println("game vector enabled");
+    Serial.println("rotation vector enabled");
+
+
+  if (! bno08x_B.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED, 5000)) {
+    Serial.println("Could not enable magnetic field");
+  }
+  else
+    Serial.println("magnetic field enabled");
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -507,6 +548,37 @@ void loop()
         barPacket.pressure = -999;
       }
     }
+
+    if (millis() - gpsTimer >= gpsTP_rx)
+    {
+      gpsTimer = millis();
+      if (GPS_SERIAL.available() > 0)
+      {
+        if (gps.encode(GPS_SERIAL.read()))
+        {
+          if (gps.location.isUpdated())
+          {
+            double E, N;
+            latLonToUTM_Zone43(
+                gps.location.lat(),
+                gps.location.lng(),
+                &E, &N
+            );
+            gpsPacket.easting = E;
+            gpsPacket.northing = N;
+            gpsPacket.status = 1;
+          }
+          else
+            gpsPacket.status = 0;
+        }
+        else
+          gpsPacket.status = 0;
+      }
+      else
+        gpsPacket.status = 0;
+    }
+
+
 
     if ( (millis() - rangingTimer_A >= rangingTP_rx_A) && (!trigDone_A))
     {
@@ -620,7 +692,7 @@ void loop()
     if ( millis() - imuTimer >= imuTP_rx )      //contains both IMU_A and IMU_B
     {
       imuTimer = millis();
-      if ( imuPacket_A.initFlag )
+      if ( imuPacket_A.status )
       // if ( bno08x_A.getSensorEvent(&imu_value_A) )
       {
         bno08x_A.getSensorEvent(&imu_value_A);
@@ -630,12 +702,11 @@ void loop()
         Serial.println(imu_value_A.sensorId);
         switch (imu_value_A.sensorId)
         {
-          case SH2_GAME_ROTATION_VECTOR:
-            imuPacket_A.real = imu_value_A.un.gameRotationVector.real;
-            // Serial.println(imu_value_A.un.gameRotationVector.real);
-            imuPacket_A.i = imu_value_A.un.gameRotationVector.i;
-            imuPacket_A.j = imu_value_A.un.gameRotationVector.j;
-            imuPacket_A.k = imu_value_A.un.gameRotationVector.k;
+          case SH2_ROTATION_VECTOR:
+            imuPacket_A.game_real = imu_value_A.un.rotationVector.real;
+            imuPacket_A.game_i = imu_value_A.un.rotationVector.i;
+            imuPacket_A.game_j = imu_value_A.un.rotationVector.j;
+            imuPacket_A.game_k = imu_value_A.un.rotationVector.k;
             Serial.println("Correct Case");
             // Serial.println("Setting IMU packet");
             // Serial.println(imu_value_A.un.gameRotationVector.real);
@@ -643,42 +714,60 @@ void loop()
             // Serial.println(imu_value_A.un.gameRotationVector.j);
             // Serial.println(imu_value_A.un.gameRotationVector.k);
             break;
+
+          case SH2_MAGNETIC_FIELD_CALIBRATED:
+            imuPacket_A.magnetic_x = imu_value_A.un.magneticField.x;
+            imuPacket_A.magnetic_y = imu_value_A.un.magneticField.x;
+            imuPacket_A.magnetic_z = imu_value_A.un.magneticField.x;
+            break;
         }
       }
       else      //if not initialized
       {
-        imuPacket_A.real = -999.0;
-        imuPacket_A.i = -999.0;
-        imuPacket_A.j = -999.0;
-        imuPacket_A.k = -999.0;
+        imuPacket_A.game_real = -999.0;
+        imuPacket_A.game_i = -999.0;
+        imuPacket_A.game_j = -999.0;
+        imuPacket_A.game_k = -999.0;
+        imuPacket_A.magnetic_x = -999.0;
+        imuPacket_A.magnetic_y = -999.0;
+        imuPacket_A.magnetic_z = -999.0;
       }
 
-      if ( imuPacket_B.initFlag )
+      if ( imuPacket_B.status )
       {
         bno08x_B.getSensorEvent(&imu_value_B);
         // Serial.println("updating imu value");
         // Serial.println(imu_value_A.sensorId);
         switch (imu_value_B.sensorId)
         {
-          case SH2_GAME_ROTATION_VECTOR:
-            imuPacket_B.real = imu_value_B.un.gameRotationVector.real;
-            imuPacket_B.i = imu_value_B.un.gameRotationVector.i;
-            imuPacket_B.j = imu_value_B.un.gameRotationVector.j;
-            imuPacket_B.k = imu_value_B.un.gameRotationVector.k;
+          case SH2_ROTATION_VECTOR:
+            imuPacket_B.game_real = imu_value_B.un.rotationVector.real;
+            imuPacket_B.game_i = imu_value_B.un.rotationVector.i;
+            imuPacket_B.game_j = imu_value_B.un.rotationVector.j;
+            imuPacket_B.game_k = imu_value_B.un.rotationVector.k;
             // Serial.println("Setting IMU packet");
             // Serial.println(imu_value_A.un.gameRotationVector.real);
             // Serial.println(imu_value_A.un.gameRotationVector.i);
             // Serial.println(imu_value_A.un.gameRotationVector.j);
             // Serial.println(imu_value_A.un.gameRotationVector.k);
             break;
+
+          case SH2_MAGNETIC_FIELD_CALIBRATED:
+            imuPacket_B.magnetic_x = imu_value_B.un.magneticField.x;
+            imuPacket_B.magnetic_y = imu_value_B.un.magneticField.x;
+            imuPacket_B.magnetic_z = imu_value_B.un.magneticField.x;
+            break;
         }
       }
       else      //if not initialized
       {
-        imuPacket_B.real = -999.0;
-        imuPacket_B.i = -999.0;
-        imuPacket_B.j = -999.0;
-        imuPacket_B.k = -999.0;
+        imuPacket_B.game_real = -999.0;
+        imuPacket_B.game_i = -999.0;
+        imuPacket_B.game_j = -999.0;
+        imuPacket_B.game_k = -999.0;
+        imuPacket_B.magnetic_x = -999.0;
+        imuPacket_B.magnetic_y = -999.0;
+        imuPacket_B.magnetic_z = -999.0;
       }
     }
 
@@ -874,8 +963,10 @@ void cmd_exec (char buf[])
 
     analogWrite(PWM_PIN_A, val[0]);
     digitalWrite(DIR_PIN_A, val[1]);
-    analogWrite(PWM_PIN_A, val[2]);
-    digitalWrite(DIR_PIN_A, val[3]);
+    analogWrite(PWM_PIN_B, val[2]);
+    digitalWrite(DIR_PIN_B, val[3]);
+    Serial.println(val[0]);
+    Serial.println(val[1]);
     return;
   }
   else if ( !strcmp(cmd, "RSET"))     //used to stop all motors and thrusters and all interrupt functions
@@ -894,8 +985,8 @@ void cmd_exec (char buf[])
   // }
   else if ( !strcmp(cmd, "STAT"))
   {
-    Serial.println(imuPacket_A.initFlag);
-    Serial.println(imuPacket_B.initFlag);
+    Serial.println(imuPacket_A.status);
+    Serial.println(imuPacket_B.status);
     Serial.println(barPacket.initFlag);
     delay(1000);
     return;
@@ -908,7 +999,7 @@ void cmd_exec (char buf[])
   }
   else if ( !strcmp(cmd, "SELA"))
   {
-    if ( !imuPacket_A.initFlag )
+    if ( !imuPacket_A.status )
     {
       // selectIMU_A();
       // imuPacket_B.initFlag = false;
@@ -922,7 +1013,7 @@ void cmd_exec (char buf[])
   }
   else if ( !strcmp(cmd, "SELB"))
   {
-    if ( !imuPacket_B.initFlag )
+    if ( !imuPacket_B.status )
     {
       // selectIMU_B();
       // imuPacket_A.initFlag = false;
@@ -941,6 +1032,7 @@ void cmd_exec (char buf[])
     logFile.println(unifiedSensor.enc2);
     logFile.println(unifiedSensor.rang1);
     logFile.println(unifiedSensor.rang2);
+
     logFile.println(unifiedSensor.imu1[0]);
     logFile.println(unifiedSensor.imu1[1]);
     logFile.println(unifiedSensor.imu1[2]);
@@ -949,6 +1041,14 @@ void cmd_exec (char buf[])
     logFile.println(unifiedSensor.imu2[1]);
     logFile.println(unifiedSensor.imu2[2]);
     logFile.println(unifiedSensor.imu2[3]);
+
+    logFile.println(unifiedSensor.imu1[4]);
+    logFile.println(unifiedSensor.imu1[5]);
+    logFile.println(unifiedSensor.imu1[6]);
+    logFile.println(unifiedSensor.imu2[4]);
+    logFile.println(unifiedSensor.imu2[5]);
+    logFile.println(unifiedSensor.imu2[6]);
+
     logFile.println();
   }
   else if ( !strcmp(cmd, "STOP"))
@@ -984,35 +1084,61 @@ void build_sensor_packet(void)
   unifiedSensor.rang1 = rangingPacket_A.distance;
   unifiedSensor.rang2 = rangingPacket_B.distance;
   
-  unifiedSensor.imu1[0] = imuPacket_A.real;
-  unifiedSensor.imu1[1] = imuPacket_A.i;
-  unifiedSensor.imu1[2] = imuPacket_A.j;
-  unifiedSensor.imu1[3] = imuPacket_A.k;
+  unifiedSensor.imu1[0] = imuPacket_A.game_real;
+  unifiedSensor.imu1[1] = imuPacket_A.game_i;
+  unifiedSensor.imu1[2] = imuPacket_A.game_j;
+  unifiedSensor.imu1[3] = imuPacket_A.game_k;
   
-  unifiedSensor.imu2[0] = imuPacket_B.real;
-  unifiedSensor.imu2[1] = imuPacket_B.i;
-  unifiedSensor.imu2[2] = imuPacket_B.j;
-  unifiedSensor.imu2[3] = imuPacket_B.k;
+  unifiedSensor.imu2[0] = imuPacket_B.game_real;
+  unifiedSensor.imu2[1] = imuPacket_B.game_i;
+  unifiedSensor.imu2[2] = imuPacket_B.game_j;
+  unifiedSensor.imu2[3] = imuPacket_B.game_k;
+
+  unifiedSensor.imu1[4] = imuPacket_A.magnetic_x;
+  unifiedSensor.imu1[5] = imuPacket_A.magnetic_y;
+  unifiedSensor.imu1[6] = imuPacket_A.magnetic_z;
   
-  uint8_t header = 0xAA;
+  unifiedSensor.imu2[4] = imuPacket_B.magnetic_x;
+  unifiedSensor.imu2[5] = imuPacket_B.magnetic_y;
+  unifiedSensor.imu2[6] = imuPacket_B.magnetic_z;
+
+  unifiedSensor.gps[0] = gpsPacket.easting;
+  unifiedSensor.gps[1] = gpsPacket.northing;
+  
+  // uint8_t header = 0xAA;
   // Serial.write(&header, 1);
   // Serial.write((uint8_t*)&unifiedSensor, sizeof(unifiedSensor));
 
-  Serial.println("Sensors:");
+  // Serial.println("Sensors:");
+  Serial.print("<ST>");
+  Serial.print("SDAT:");
   Serial.println(unifiedSensor.bar);
-  Serial.println();
   Serial.println(unifiedSensor.enc1);
   Serial.println(unifiedSensor.enc2);
   Serial.println(unifiedSensor.rang1);
   Serial.println(unifiedSensor.rang2);
+
   Serial.println(unifiedSensor.imu1[0]);
   Serial.println(unifiedSensor.imu1[1]);
   Serial.println(unifiedSensor.imu1[2]);
   Serial.println(unifiedSensor.imu1[3]);
+
   Serial.println(unifiedSensor.imu2[0]);
   Serial.println(unifiedSensor.imu2[1]);
   Serial.println(unifiedSensor.imu2[2]);
   Serial.println(unifiedSensor.imu2[3]);
+
+  Serial.println(unifiedSensor.imu1[4]);
+  Serial.println(unifiedSensor.imu1[5]);
+  Serial.println(unifiedSensor.imu1[6]);
+
+  Serial.println(unifiedSensor.imu2[4]);
+  Serial.println(unifiedSensor.imu2[5]);
+  Serial.println(unifiedSensor.imu2[6]);
+
+  Serial.println(unifiedSensor.gps[0]);
+  Serial.println(unifiedSensor.gps[1]);
+  Serial.println("<EN>");
 
   // logFile.println(unifiedSensor.bar);
   // logFile.println(unifiedSensor.enc1);
@@ -1049,6 +1175,53 @@ void rebootSaveState ( uint8_t imu )
   SCB_AIRCR = 0x05FA0004;
 }
 
+
+void latLonToUTM_Zone43(double lat, double lon,
+                        double *easting, double *northing)
+{
+    // WGS84 constants
+    const double a  = 6378137.0;
+    const double f  = 1 / 298.257223563;
+    const double k0 = 0.9996;
+
+    const double e2 = f * (2 - f);
+    const double ep2 = e2 / (1 - e2);
+
+    // Convert to radians
+    double phi = lat * DEG_TO_RAD;
+    double lambda = lon * DEG_TO_RAD;
+
+    // Central meridian (Zone 43)
+    double lambda0 = 75.0 * DEG_TO_RAD;
+
+    double N = a / sqrt(1 - e2 * sin(phi) * sin(phi));
+    double T = tan(phi) * tan(phi);
+    double C = ep2 * cos(phi) * cos(phi);
+    double A = cos(phi) * (lambda - lambda0);
+
+    // Meridian arc
+    double M = a * (
+        (1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256) * phi
+        - (3*e2/8 + 3*e2*e2/32 + 45*e2*e2*e2/1024) * sin(2*phi)
+        + (15*e2*e2/256 + 45*e2*e2*e2/1024) * sin(4*phi)
+        - (35*e2*e2*e2/3072) * sin(6*phi)
+    );
+
+    // Easting
+    *easting = k0 * N * (
+        A + (1 - T + C) * pow(A,3)/6
+        + (5 - 18*T + T*T + 72*C - 58*ep2) * pow(A,5)/120
+    ) + 500000.0;
+
+    // Northing (Northern hemisphere → no offset)
+    *northing = k0 * (
+        M + N * tan(phi) * (
+            A*A/2
+            + (5 - T + 9*C + 4*C*C) * pow(A,4)/24
+            + (61 - 58*T + T*T + 600*C - 330*ep2) * pow(A,6)/720
+        )
+    );
+}
 
 // void selectIMU_A ( void )
 // {
